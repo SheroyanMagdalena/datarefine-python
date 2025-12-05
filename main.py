@@ -19,6 +19,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
 @app.post("/build-pipeline")
 async def build_pipeline_endpoint(
     file: UploadFile = File(...),
@@ -57,3 +62,4 @@ async def build_pipeline_endpoint(
         "columns": list(df_processed.columns),
         # TODO later: maybe return profiling, charts, etc.
     }
+
