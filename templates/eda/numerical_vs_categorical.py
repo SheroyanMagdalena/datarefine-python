@@ -10,3 +10,4 @@ print(numeric_cols)
 print("\\nCategorical columns:")
 print(categorical_cols)
 """
+NUMERICAL_VS_CATEGORICAL = NUM_VS_CAT
