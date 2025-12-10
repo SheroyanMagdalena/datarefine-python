@@ -14,8 +14,9 @@ from sklearn.metrics import (
     mean_squared_error,
     mean_absolute_error,
     r2_score,
+    classification_report,
 )
-    
+
 
 def train_random_forest(
     df: pd.DataFrame,
@@ -41,7 +42,12 @@ def train_random_forest(
             ...
         ],
         "feature_importance_plot": str,
-        "dropped_rows_with_missing_target": int
+        "dropped_rows_with_missing_target": int,
+        "split_info": {
+            "stratified": bool,
+            "reason": str | None,
+            "class_counts": {class_label: count, ...} | None
+        }
     }
     """
 
@@ -90,11 +96,38 @@ def train_random_forest(
     else:
         resolved_type = problem_type
 
-    # Train/test split
-    stratify = y if resolved_type == "classification" else None
+    # --- Decide whether we can safely stratify ---
+    stratify = None
+    split_info = {
+        "stratified": False,
+        "reason": None,
+        "class_counts": None,
+    }
 
+    if resolved_type == "classification":
+        class_counts = y.value_counts()
+        min_count = int(class_counts.min())
+
+        # Save counts in a JSON-safe way (keys -> strings)
+        split_info["class_counts"] = {str(k): int(v) for k, v in class_counts.items()}
+
+        if min_count >= 2:
+            # Safe to stratify
+            stratify = y
+            split_info["stratified"] = True
+            split_info["reason"] = "all_classes_have_at_least_2_samples"
+        else:
+            # Too few samples in at least one class -> cannot stratify
+            stratify = None
+            split_info["stratified"] = False
+            split_info["reason"] = (
+                "disabled_stratify_min_class_count_lt_2"
+            )
+
+    # Train/test split
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y,
+        X,
+        y,
         test_size=test_size,
         random_state=random_state,
         stratify=stratify,
@@ -133,7 +166,7 @@ def train_random_forest(
         report = classification_report(y_test, y_pred)
     else:
         mse = mean_squared_error(y_test, y_pred)
-        rmse = sqrt(mse)  # <- no `squared=False` now
+        rmse = sqrt(mse)
 
         metrics_raw = {
             "mse": mse,
@@ -144,6 +177,7 @@ def train_random_forest(
         report = None
 
     metrics = {k: float(v) for k, v in metrics_raw.items()}
+
     # Feature importances
     feat_df = (
         pd.DataFrame(
@@ -172,4 +206,5 @@ def train_random_forest(
         "feature_importances": feature_importances,
         "feature_importance_plot": save_path,
         "dropped_rows_with_missing_target": dropped,
+        "split_info": split_info,
     }

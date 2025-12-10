@@ -1,73 +1,70 @@
 import pandas as pd
-import numpy as np
 from sklearn.preprocessing import OrdinalEncoder
 
-def ordinal_encode(df: pd.DataFrame, columns=None, handle_unknown="use_encoded_value", unknown_value=-1):
+
+def ordinal_encode(
+    df: pd.DataFrame,
+    target: str | None = None,
+    columns: list[str] | None = None,
+):
     """
-    Performs ordinal encoding on selected categorical columns.
+    Ordinal-encode categorical features while keeping the target column intact.
 
     Parameters
     ----------
     df : pd.DataFrame
-        Input dataset.
-    columns : list or None
-        Columns to encode. If None, auto-detects object/category columns.
-    handle_unknown : str
-        Behavior for unseen categories at transform-time:
-          - "use_encoded_value"
-          - "error"
-    unknown_value : int or float
-        Encoding to assign to unseen categories (only used if handle_unknown="use_encoded_value").
+        Input dataframe with features (and possibly target).
+    target : str or None
+        Name of the target column (will be preserved, not encoded).
+    columns : list[str] or None
+        Specific columns to ordinal-encode. If None, auto-detects object/category columns.
 
     Returns
     -------
     dict
         {
-            "df": transformed DataFrame,
-            "encoded_columns": list,
-            "category_mapping": {column: ordered_categories},
-            "encoder": fitted OrdinalEncoder
+            "df": encoded_df,
+            "encoder": fitted OrdinalEncoder,
+            "encoded_columns": list[str]
         }
     """
 
     new_df = df.copy()
 
-    # Auto-detect columns
-    if columns is None:
-        columns = new_df.select_dtypes(include=["object", "category"]).columns.tolist()
+    # Separate target if provided
+    if target is not None and target in new_df.columns:
+        y = new_df[target]
+        X = new_df.drop(columns=[target])
+    else:
+        y = None
+        X = new_df
 
-    if not columns:
+    # Determine columns to encode
+    if columns is None:
+        cat_cols = X.select_dtypes(include=["object", "category"]).columns.tolist()
+    else:
+        cat_cols = columns
+
+    if not cat_cols:
+        # Nothing to encode
         return {
-            "df": new_df,
+            "df": df.copy(),
+            "encoder": None,
             "encoded_columns": [],
-            "category_mapping": {},
-            "encoder": None
         }
 
-    # Extract the subset to encode
-    subset = new_df[columns]
+    # Fit OrdinalEncoder on categorical columns
+    enc = OrdinalEncoder(handle_unknown="use_encoded_value", unknown_value=-1)
+    X[cat_cols] = enc.fit_transform(X[cat_cols])
 
-    # Create encoder
-    encoder = OrdinalEncoder(
-        handle_unknown=handle_unknown,
-        unknown_value=unknown_value
-    )
-
-    # Fit + transform
-    transformed = encoder.fit_transform(subset)
-
-    # Assign back
-    new_df[columns] = transformed
-
-    # Build mapping for interpretability
-    category_mapping = {
-        col: list(categories)
-        for col, categories in zip(columns, encoder.categories_)
-    }
+    # Reattach target if we had it
+    if y is not None:
+        encoded_df = pd.concat([X, y], axis=1)
+    else:
+        encoded_df = X
 
     return {
-        "df": new_df,
-        "encoded_columns": columns,
-        "category_mapping": category_mapping,
-        "encoder": encoder
+        "df": encoded_df,
+        "encoder": enc,
+        "encoded_columns": cat_cols,
     }

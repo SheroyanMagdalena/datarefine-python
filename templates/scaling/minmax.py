@@ -1,54 +1,56 @@
 import pandas as pd
-import numpy as np
 from sklearn.preprocessing import MinMaxScaler
 
-def apply_minmax_scaler(df: pd.DataFrame, columns=None):
+
+def apply_minmax_scaler(df: pd.DataFrame, target: str | None = None, columns=None):
     """
-    Applies MinMax scaling (0 to 1) to numeric columns in a DataFrame.
+    Apply Min-Max scaling to numeric feature columns, keeping the target intact.
 
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Input dataset.
-    columns : list or None
-        Columns to scale. If None, auto-detects numeric columns.
-
-    Returns
-    -------
-    dict
+    Returns:
         {
-            "df": scaled DataFrame,
-            "scaler": fitted MinMaxScaler,
-            "scaled_columns": list[str]
+            "df": scaled_df,
+            "scaled_columns": list_of_scaled_columns,
+            "scaler_params": {...}
         }
     """
 
-    new_df = df.copy()
+    # Separate target
+    if target is not None and target in df.columns:
+        y = df[target]
+        X = df.drop(columns=[target])
+    else:
+        y = None
+        X = df
 
-    # Auto-detect numeric columns
-    if columns is None:
-        columns = new_df.select_dtypes(include=[np.number]).columns.tolist()
+    # Choose numeric columns to scale
+    num_cols = X.select_dtypes(include=["number"]).columns.tolist()
 
-    if not columns:
+    if not num_cols:
+        scaled_df = df.copy()
         return {
-            "df": new_df,
-            "scaler": None,
-            "scaled_columns": []
+            "df": scaled_df,
+            "scaled_columns": [],
+            "scaler_params": {},
         }
 
-    # Handle missing values — scale requires no NaNs
-    new_df[columns] = new_df[columns].fillna(new_df[columns].median())
-
-    # Replace infinite values to avoid scaling crashes
-    new_df[columns] = new_df[columns].replace([np.inf, -np.inf], np.nan)
-    new_df[columns] = new_df[columns].fillna(new_df[columns].median())
-
-    # Fit scaler
     scaler = MinMaxScaler()
-    new_df[columns] = scaler.fit_transform(new_df[columns])
+    X_scaled = X.copy()
+    X_scaled[num_cols] = scaler.fit_transform(X[num_cols])
+
+    # Reattach target
+    if y is not None:
+        scaled_df = pd.concat([X_scaled, y], axis=1)
+    else:
+        scaled_df = X_scaled
+
+    scaler_params = {
+        "feature_range": scaler.feature_range,
+        "data_min_": scaler.data_min_.tolist(),
+        "data_max_": scaler.data_max_.tolist(),
+    }
 
     return {
-        "df": new_df,
-        "scaler": scaler,
-        "scaled_columns": columns
+        "df": scaled_df,
+        "scaled_columns": num_cols,
+        "scaler_params": scaler_params,
     }

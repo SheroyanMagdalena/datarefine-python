@@ -1,59 +1,48 @@
 import pandas as pd
 
-def one_hot_encode(df: pd.DataFrame, columns=None, drop_first=False):
+
+def one_hot_encode(df: pd.DataFrame, target: str | None = None):
     """
-    Performs one-hot encoding on categorical columns in a safe,
-    production-ready manner.
+    One-hot encode categorical features while keeping the target column intact.
 
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Input dataset.
-    columns : list or None
-        Columns to encode. If None, automatically detects object/category columns.
-    drop_first : bool
-        Whether to drop the first category to avoid multicollinearity.
-
-    Returns
-    -------
-    dict
+    Returns:
         {
-            "df": encoded DataFrame,
-            "encoded_columns": list of columns that were encoded,
-            "new_columns": list of new one-hot columns generated,
-            "category_mapping": dict mapping original_col -> categories
+            "df": encoded_df,
+            "encoded_columns": list_of_encoded_columns
         }
     """
 
-    new_df = df.copy()
+    # Separate target if provided
+    if target is not None and target in df.columns:
+        y = df[target]
+        X = df.drop(columns=[target])
+    else:
+        y = None
+        X = df
 
-    # Auto-detect columns if none provided
-    if columns is None:
-        columns = new_df.select_dtypes(include=["object", "category"]).columns.tolist()
+        # If target was provided but missing, we still let pipeline continue;
+        # modeling will complain later if needed.
 
-    if not columns:
+    # Select object/category columns to encode
+    cat_cols = X.select_dtypes(include=["object", "category"]).columns.tolist()
+
+    if not cat_cols:
+        # Nothing to encode
+        encoded_df = df.copy()
         return {
-            "df": new_df,
+            "df": encoded_df,
             "encoded_columns": [],
-            "new_columns": [],
-            "category_mapping": {}
         }
 
-    category_mapping = {}
+    X_encoded = pd.get_dummies(X, columns=cat_cols, drop_first=False)
 
-    # Save category info before encoding
-    for col in columns:
-        category_mapping[col] = new_df[col].astype("category").cat.categories.tolist()
-
-    # Perform encoding
-    encoded_df = pd.get_dummies(new_df, columns=columns, drop_first=drop_first)
-
-    # Collect new column names created
-    new_columns = [c for c in encoded_df.columns if any(col + "_" in c for col in columns)]
+    # Reattach target if we had it
+    if y is not None:
+        encoded_df = pd.concat([X_encoded, y], axis=1)
+    else:
+        encoded_df = X_encoded
 
     return {
         "df": encoded_df,
-        "encoded_columns": columns,
-        "new_columns": new_columns,
-        "category_mapping": category_mapping
+        "encoded_columns": cat_cols,
     }

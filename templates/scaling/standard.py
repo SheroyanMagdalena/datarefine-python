@@ -2,14 +2,21 @@ import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
 
-def apply_standard_scaler(df: pd.DataFrame, columns=None):
+
+def apply_standard_scaler(
+    df: pd.DataFrame,
+    target: str | None = None,
+    columns=None,
+):
     """
-    Applies Standard Scaling (mean=0, std=1) to numeric columns.
+    Applies Standard Scaling (mean=0, std=1) to numeric feature columns.
 
     Parameters
     ----------
     df : pd.DataFrame
         Input dataset.
+    target : str or None
+        Name of the target column (will be excluded from scaling if numeric).
     columns : list or None
         Columns to scale. If None, auto-detects numeric columns.
 
@@ -29,12 +36,16 @@ def apply_standard_scaler(df: pd.DataFrame, columns=None):
     if columns is None:
         columns = new_df.select_dtypes(include=[np.number]).columns.tolist()
 
-    # If no numeric columns → return unchanged df
+    # Do NOT scale the target column if it is in the list
+    if target is not None and target in columns:
+        columns.remove(target)
+
+    # If no numeric columns to scale → return unchanged df
     if not columns:
         return {
             "df": new_df,
             "scaler": None,
-            "scaled_columns": []
+            "scaled_columns": [],
         }
 
     # Handle missing values — StandardScaler cannot handle NaN
@@ -44,12 +55,12 @@ def apply_standard_scaler(df: pd.DataFrame, columns=None):
     new_df[columns] = new_df[columns].replace([np.inf, -np.inf], np.nan)
     new_df[columns] = new_df[columns].fillna(new_df[columns].median())
 
-    # Fit StandardScaler
+    # Fit StandardScaler and transform
     scaler = StandardScaler()
     new_df[columns] = scaler.fit_transform(new_df[columns])
 
     return {
         "df": new_df,
         "scaler": scaler,
-        "scaled_columns": columns
+        "scaled_columns": columns,
     }

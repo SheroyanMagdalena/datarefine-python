@@ -122,15 +122,18 @@ def build_pipeline(user_json, file_path, file_type="csv", target=None, verbose=T
         # Ensure stage bucket exists
         artifacts.setdefault(stage, {})
 
-        # Modeling needs target; others only need df
+        # --- Call the underlying function ---
         if stage == "modeling":
             if target is None:
                 raise ValueError("Target column must be provided for modeling stage.")
+            result = func(current_df, target=target)  # modeling gets target
+        elif stage in ("encoding", "scaling"):
+             # encoding & scaling may need target to skip it
             result = func(current_df, target=target)
         else:
             result = func(current_df)
 
-        # Interpret result
+        # --- Interpret result ---
         if isinstance(result, pd.DataFrame):
             # Bare DataFrame -> pipeline continues with updated df
             current_df = result

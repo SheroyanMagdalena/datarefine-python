@@ -7,12 +7,16 @@ import math
 import numpy as np
 import pandas as pd
 from fastapi import FastAPI, File, Form, UploadFile
-from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from builder import build_pipeline
 from report import generate_pdf_report  # adjust import if needed
+
+try:
+    from sklearn.base import BaseEstimator
+except ImportError:
+    BaseEstimator = object
 
 app = FastAPI()
 
@@ -25,9 +29,86 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.get("/health")
 def health_check():
     return {"status": "ok"}
+
+
+# ---------- JSON sanitizer ----------
+
+def sanitize_for_json(obj):
+    """
+    Recursively convert the pipeline result into something JSON-serializable.
+
+    - Primitives stay as-is (with NaN/inf -> None for floats)
+    - numpy scalars -> Python scalars
+    - numpy arrays -> lists (recursively sanitized)
+    - pandas DF/Series -> small dict previews
+    - sklearn models/scalers/encoders -> string representation
+    - callables (functions/methods) -> string
+    - everything else -> str(obj) as a last resort
+    """
+
+    # Basic primitives
+    if isinstance(obj, (str, int, bool)) or obj is None:
+        return obj
+
+    # Floats: handle NaN / inf
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+
+    # numpy scalars
+    if isinstance(obj, np.generic):
+        v = obj.item()
+        if isinstance(v, float) and (math.isnan(v) or math.isinf(v)):
+            return None
+        return v
+
+    # numpy arrays
+    if isinstance(obj, np.ndarray):
+        return [sanitize_for_json(x) for x in obj.tolist()]
+
+    # pandas DataFrame / Series
+    if isinstance(obj, pd.DataFrame):
+        # limit size to avoid dumping everything
+        return obj.head(50).to_dict(orient="records")
+    if isinstance(obj, pd.Series):
+        return obj.head(50).to_dict()
+
+    # sklearn estimators (models, scalers, encoders, etc.)
+    if isinstance(obj, BaseEstimator):
+        return str(obj)
+
+    # lists / tuples / sets
+    if isinstance(obj, (list, tuple, set)):
+        return [sanitize_for_json(x) for x in obj]
+
+    # dicts
+    if isinstance(obj, dict):
+        clean = {}
+        for k, v in obj.items():
+            # Optionally coerce big / weird keys explicitly:
+            if k in ("model", "scaler", "encoder"):
+                clean[k] = str(v)
+            else:
+                clean[k] = sanitize_for_json(v)
+        return clean
+
+    # callables (functions/methods)
+    if callable(obj):
+        return str(obj)
+
+    # Fallback: best-effort string
+    try:
+        return str(obj)
+    except Exception:
+        return None
+
+
+# ---------- main endpoint ----------
 
 @app.post("/build-pipeline")
 async def build_pipeline_endpoint(
@@ -100,38 +181,11 @@ async def build_pipeline_endpoint(
         "report_path": report_path,
     }
 
-    # --- Make everything JSON-safe ---
-    safe_response = jsonable_encoder(
-        raw_response,
-        custom_encoder={
-            # numpy scalars -> Python scalars
-            np.generic: lambda x: x.item(),
-            # numpy arrays -> lists
-            np.ndarray: lambda x: x.tolist(),
-        },
-    )
-    cleaned = replace_nans(safe_response)
+    # --- Make everything JSON-safe with our custom sanitizer ---
+    safe_response = sanitize_for_json(raw_response)
 
-    return JSONResponse(content=cleaned)
+    return JSONResponse(content=safe_response)
 
-def replace_nans(obj):
-    """
-    Recursively walk a nested structure (dict/list/scalars)
-    and replace NaN / inf floats with None so JSON is happy.
-    """
-    if isinstance(obj, float):
-        if math.isnan(obj) or math.isinf(obj):
-            return None
-        return obj
-
-    if isinstance(obj, dict):
-        return {k: replace_nans(v) for k, v in obj.items()}
-
-    if isinstance(obj, list):
-        return [replace_nans(v) for v in obj]
-
-    # Leave everything else as-is (str, int, bool, None, etc.)
-    return obj
 
 @app.get("/download-report")
 def download_report():
