@@ -1,7 +1,23 @@
-fastapi
-uvicorn[standard]
-pandas
-python-multipart
-seaborn
-matplotlib
-scikit-learn
+# Core data libraries
+pandas>=1.5.0
+numpy>=1.21.0
+
+# Scikit-learn: for all models, encoders, scalers, metrics
+scikit-learn>=1.2.0
+
+# XGBoost model
+xgboost>=1.7.0
+
+# Plotting (for correlation heatmap)
+matplotlib>=3.5.0
+seaborn>=0.12.0
+
+# Web framework
+fastapi>=0.88.0
+uvicorn[standard]>=0.20.0
+
+# Optional Jupyter-style display fallback
+ipython>=8.0.0
+
+
+reportlab>=3.6.0

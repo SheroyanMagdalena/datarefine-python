@@ -1,13 +1,57 @@
-NUM_VS_CAT = """
-print("Numerical vs categorical columns:")
+import pandas as pd
+import numpy as np
 
-numeric_cols = df.select_dtypes(include=["number"]).columns.tolist()
-categorical_cols = df.select_dtypes(exclude=["number"]).columns.tolist()
+def get_numeric_and_categorical_columns(df: pd.DataFrame):
+    """
+    Splits DataFrame columns into numeric vs categorical groups.
+    Datetime columns are returned separately for clarity.
 
-print("\\nNumeric columns:")
-print(numeric_cols)
+    Parameters
+    ----------
+    df : pd.DataFrame
 
-print("\\nCategorical columns:")
-print(categorical_cols)
-"""
-NUMERICAL_VS_CATEGORICAL = NUM_VS_CAT
+    Returns
+    -------
+    dict
+        {
+            "numeric": list of numeric column names,
+            "categorical": list of categorical/object columns,
+            "datetime": list of datetime columns,
+            "counts": {
+                "numeric": int,
+                "categorical": int,
+                "datetime": int,
+                "total": int
+            }
+        }
+    """
+
+    if df.empty:
+        return {
+            "numeric": [],
+            "categorical": [],
+            "datetime": [],
+            "counts": {
+                "numeric": 0,
+                "categorical": 0,
+                "datetime": 0,
+                "total": 0
+            }
+        }
+
+    # Identify column types
+    numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+    datetime_cols = df.select_dtypes(include=["datetime64[ns]", "datetime"]).columns.tolist()
+    categorical_cols = df.select_dtypes(exclude=[np.number, "datetime64[ns]", "datetime"]).columns.tolist()
+
+    return {
+        "numeric": numeric_cols,
+        "categorical": categorical_cols,
+        "datetime": datetime_cols,
+        "counts": {
+            "numeric": len(numeric_cols),
+            "categorical": len(categorical_cols),
+            "datetime": len(datetime_cols),
+            "total": df.shape[1]
+        }
+    }

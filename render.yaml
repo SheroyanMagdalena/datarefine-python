@@ -2,9 +2,13 @@ services:
   - type: web
     name: datarefine-pipeline
     runtime: python
-    plan: free    # or starter, depending on what you choose
+    plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    startCommand: uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}
+    autoDeploy: true
     envVars:
       - key: PYTHONUNBUFFERED
         value: "1"
+      - key: PORT
+        value: "8000"
+
