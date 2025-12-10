@@ -1,5 +1,3 @@
-# builder.py
-
 import pandas as pd
 
 # ----- Import all approved functions -----
@@ -12,7 +10,9 @@ from templates.cleaning.remove_duplicates import remove_duplicates
 from templates.eda.convert_objects import convert_objects_to_numeric
 from templates.eda.correlation import plot_correlation_matrix
 from templates.eda.head import get_head
-from templates.eda.numerical_vs_categorical import get_numeric_and_categorical_columns
+from templates.eda.numerical_vs_categorical import (
+    get_numeric_and_categorical_columns,
+)
 from templates.eda.shape import get_shape
 from templates.eda.summary_stats import get_summary_stats
 
@@ -29,17 +29,30 @@ from templates.scaling.standard import apply_standard_scaler
 
 def build_pipeline(user_json, file_path, file_type="csv", target=None, verbose=True):
     """
-    Executes a series of processing/modeling steps against an uploaded dataset,
-    based on user_json, and returns the final DataFrame + artifacts.
+    Executes a series of processing/modeling steps against an uploaded dataset
+    and returns the final DataFrame + artifacts.
 
-    user_json example:
-    {
-        "eda": ["head", "summary_stats"],
-        "cleaning": ["handle_missing"],
-        "encoding": ["onehot"],
-        "scaling": ["standard"],
-        "modeling": ["random_forest"]
-    }
+    Supports TWO config shapes:
+
+    1) NEW (used by Next.js UI now):
+       {
+         "steps": [
+           {"module": "cleaning", "function": "handle_missing"},
+           {"module": "eda", "function": "head"},
+           {"module": "encoding", "function": "onehot"},
+           {"module": "scaling", "function": "standard"},
+           {"module": "modeling", "function": "random_forest"}
+         ]
+       }
+
+    2) OLD (stage-based, still supported for backwards compatibility):
+       {
+         "eda": ["head", "summary_stats"],
+         "cleaning": ["handle_missing"],
+         "encoding": ["onehot"],
+         "scaling": ["standard"],
+         "modeling": ["random_forest"]
+       }
     """
 
     # 1) Load dataset
@@ -57,7 +70,6 @@ def build_pipeline(user_json, file_path, file_type="csv", target=None, verbose=T
     artifacts: dict[str, dict] = {}
 
     # 2) Function registry by stage and template name
-    # Keys in user_json must match these keys.
     REGISTRY = {
         "cleaning": {
             "detect_outliers": detect_outliers,                # df -> dict (no df change)
@@ -89,68 +101,116 @@ def build_pipeline(user_json, file_path, file_type="csv", target=None, verbose=T
         },
     }
 
-    # 3) Execute stages in order
-    for stage, steps in user_json.items():
-        if verbose:
-            print(f"\n=== Running stage: {stage} ===")
+    # Helper: execute one step
+    def _run_step(stage: str, step_name: str):
+        nonlocal current_df, artifacts
 
         if stage not in REGISTRY:
             if verbose:
                 print(f"Skipping unknown stage '{stage}'")
-            continue
+            return
 
-        if not isinstance(steps, (list, tuple)):
+        func = REGISTRY[stage].get(step_name)
+        if func is None:
             if verbose:
-                print(f"Skipping stage '{stage}': steps is not a list/tuple")
-            continue
+                print(f"Unknown step '{step_name}' in stage '{stage}', skipping.")
+            return
 
+        if verbose:
+            print(f"- Executing: {stage}.{step_name}")
+
+        # Ensure stage bucket exists
         artifacts.setdefault(stage, {})
 
-        for step_name in steps:
-            if not isinstance(step_name, str):
+        # Modeling needs target; others only need df
+        if stage == "modeling":
+            if target is None:
+                raise ValueError("Target column must be provided for modeling stage.")
+            result = func(current_df, target=target)
+        else:
+            result = func(current_df)
+
+        # Interpret result
+        if isinstance(result, pd.DataFrame):
+            # Bare DataFrame -> pipeline continues with updated df
+            current_df = result
+            return
+
+        if isinstance(result, dict):
+            # df + other outputs
+            if "df" in result and isinstance(result["df"], pd.DataFrame):
+                current_df = result["df"]
+
+            # Store all non-df parts as artifacts
+            artifacts[stage][step_name] = {
+                k: v for k, v in result.items() if k != "df"
+            }
+        else:
+            # Any other return type -> store raw as artifact
+            artifacts[stage][step_name] = result
+
+    # 3) Decide which config shape we're dealing with
+    if isinstance(user_json, dict) and "steps" in user_json and isinstance(
+        user_json["steps"], (list, tuple)
+    ):
+        # NEW STYLE: flat list of {"module", "function"}
+        if verbose:
+            print("=== Using NEW 'steps' config format ===")
+
+        for idx, step in enumerate(user_json["steps"]):
+            if not isinstance(step, dict):
                 if verbose:
-                    print(f"Skipping non-string step in stage '{stage}': {step_name!r}")
+                    print(f"Skipping non-dict step at index {idx}: {step!r}")
                 continue
 
-            func = REGISTRY[stage].get(step_name)
-            if func is None:
+            stage = step.get("module")
+            step_name = step.get("function")
+
+            if not isinstance(stage, str) or not isinstance(step_name, str):
                 if verbose:
-                    print(f"Unknown step '{step_name}' in stage '{stage}', skipping.")
+                    print(
+                        f"Skipping malformed step at index {idx}: "
+                        f"module={stage!r}, function={step_name!r}"
+                    )
                 continue
 
             if verbose:
-                print(f"- Executing: {stage}.{step_name}")
+                print(f"\n=== Running step {idx + 1}: {stage}.{step_name} ===")
 
-            # ---- Call function depending on type of step ----
-            # Most functions take df; modeling also needs target.
-            if stage == "modeling":
-                if target is None:
-                    raise ValueError("Target column must be provided for modeling stage.")
-                result = func(current_df, target=target)
-            else:
-                result = func(current_df)
+            _run_step(stage, step_name)
 
-            # ---- Interpret the result ----
-            # 1) If a function returns a bare DataFrame -> update current_df
-            if isinstance(result, pd.DataFrame):
-                current_df = result
+    else:
+        # OLD STYLE: { "eda": [...], "cleaning": [...], ... }
+        if verbose:
+            print("=== Using OLD stage-based config format ===")
+
+        for stage, steps in user_json.items():
+            if verbose:
+                print(f"\n=== Running stage: {stage} ===")
+
+            if stage not in REGISTRY:
+                if verbose:
+                    print(f"Skipping unknown stage '{stage}'")
                 continue
 
-            # 2) If it returns a dict, we may have:
-            #    - "df" key (updated df)
-            #    - other keys (metrics, summaries, plots, masks, etc.)
-            if isinstance(result, dict):
-                if "df" in result and isinstance(result["df"], pd.DataFrame):
-                    current_df = result["df"]
+            if not isinstance(steps, (list, tuple)):
+                if verbose:
+                    print(
+                        f"Skipping stage '{stage}': steps is not a list/tuple "
+                        f"(got {type(steps).__name__})"
+                    )
+                continue
 
-                # Store everything else as artifacts
-                artifacts[stage][step_name] = {
-                    k: v for k, v in result.items() if k != "df"
-                }
+            for step_name in steps:
+                if not isinstance(step_name, str):
+                    if verbose:
+                        print(
+                            f"Skipping non-string step in stage '{stage}': "
+                            f"{step_name!r}"
+                        )
+                    continue
 
-            else:
-                # 3) Any other return type: store directly as an artifact
-                artifacts[stage][step_name] = result
+                _run_step(stage, step_name)
 
     # 4) Final output
     return {
@@ -161,13 +221,30 @@ def build_pipeline(user_json, file_path, file_type="csv", target=None, verbose=T
 
 # Example usage when running this file directly
 if __name__ == "__main__":
-    pipeline_json = {
+    # Old format example (still works)
+    pipeline_json_old = {
         "eda": ["head", "summary_stats", "correlation"],
         "cleaning": ["handle_missing"],
         "encoding": ["onehot"],
         "scaling": ["standard"],
         "modeling": ["random_forest"],
     }
+
+    # New format example (matches Next.js UI now)
+    pipeline_json_new = {
+        "steps": [
+            {"module": "cleaning", "function": "handle_missing"},
+            {"module": "eda", "function": "head"},
+            {"module": "eda", "function": "summary_stats"},
+            {"module": "eda", "function": "correlation"},
+            {"module": "encoding", "function": "onehot"},
+            {"module": "scaling", "function": "standard"},
+            {"module": "modeling", "function": "random_forest"},
+        ]
+    }
+
+    # Pick which example to test
+    pipeline_json = pipeline_json_new
 
     result = build_pipeline(
         user_json=pipeline_json,

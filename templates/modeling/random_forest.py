@@ -1,37 +1,48 @@
 import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+from math import sqrt
 
 from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, classification_report
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.metrics import (
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    mean_squared_error,
+    mean_absolute_error,
+    r2_score,
+)
+    
 
-
-def train_random_forest(df: pd.DataFrame,
-                        target: str,
-                        save_path: str = "feature_importance_rf.png"):
+def train_random_forest(
+    df: pd.DataFrame,
+    target: str,
+    problem_type: str = "auto",   # "classification", "regression", or "auto"
+    test_size: float = 0.2,
+    random_state: int = 42,
+    n_estimators: int = 200,
+    save_path: str = "feature_importance_rf.png",
+):
     """
-    Trains a Random Forest classifier and returns evaluation results and
-    feature importance plot.
+    Trains a Random Forest model (classifier or regressor), computes metrics,
+    and saves a feature importance plot.
 
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Input dataframe with features and target.
-    target : str
-        Name of the target column.
-    save_path : str, optional
-        Path to save the feature importance PNG.
+    Returns JSON-serializable artifacts:
 
-    Returns
-    -------
-    dict
-        {
-            "accuracy": float,
-            "report": str,
-            "feature_importances": pd.DataFrame,
-            "feature_importance_plot": str
-        }
+    {
+        "problem_type": "classification" | "regression",
+        "metrics": { ... },
+        "report": str | None,
+        "feature_importances": [
+            {"feature": str, "importance": float},
+            ...
+        ],
+        "feature_importance_plot": str,
+        "dropped_rows_with_missing_target": int
+    }
     """
 
     if target not in df.columns:
@@ -41,41 +52,124 @@ def train_random_forest(df: pd.DataFrame,
     X = df.drop(columns=[target])
     y = df[target]
 
-    # Drop non-numeric columns
+    # Drop rows where target is NaN
+    mask = y.notna()
+    dropped = int((~mask).sum())
+    X = X[mask]
+    y = y[mask]
+
+    if X.empty or y.empty:
+        raise ValueError(
+            f"No rows with non-missing target '{target}' remain after cleaning; "
+            "cannot train RandomForest."
+        )
+
+    # Keep only numeric features
     X = X.select_dtypes(include=["number"])
 
-    # Train-test split
+    if X.shape[1] == 0:
+        raise ValueError(
+            "No numeric features available for RandomForest after preprocessing. "
+            "Make sure encoding/scaling has been applied."
+        )
+
+    # Fill remaining numeric NaNs
+    X = X.fillna(X.median(numeric_only=True))
+
+    # --- Auto-detect problem type ---
+    if problem_type == "auto":
+        if not np.issubdtype(y.dtype, np.number):
+            resolved_type = "classification"
+        else:
+            unique_vals = y.nunique(dropna=True)
+            # treat as classification if small integer label set (e.g. 0/1 or 1..5)
+            if unique_vals <= 20 and y.dropna().apply(float.is_integer).all():
+                resolved_type = "classification"
+            else:
+                resolved_type = "regression"
+    else:
+        resolved_type = problem_type
+
+    # Train/test split
+    stratify = y if resolved_type == "classification" else None
+
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42
+        X, y,
+        test_size=test_size,
+        random_state=random_state,
+        stratify=stratify,
     )
 
-    # Train model
-    model = RandomForestClassifier(n_estimators=100, random_state=42)
+    # Choose model
+    if resolved_type == "classification":
+        model = RandomForestClassifier(
+            n_estimators=n_estimators,
+            random_state=random_state,
+        )
+    else:
+        model = RandomForestRegressor(
+            n_estimators=n_estimators,
+            random_state=random_state,
+        )
+
+    # Fit
     model.fit(X_train, y_train)
 
-    # Predict and evaluate
+    # Predict
     y_pred = model.predict(X_test)
-    acc = accuracy_score(y_test, y_pred)
-    report = classification_report(y_test, y_pred)
 
+    # Metrics
+    if resolved_type == "classification":
+        metrics_raw = {
+            "accuracy": accuracy_score(y_test, y_pred),
+            "precision": precision_score(
+                y_test, y_pred, average="weighted", zero_division=0
+            ),
+            "recall": recall_score(
+                y_test, y_pred, average="weighted", zero_division=0
+            ),
+            "f1": f1_score(y_test, y_pred, average="weighted", zero_division=0),
+        }
+        report = classification_report(y_test, y_pred)
+    else:
+        mse = mean_squared_error(y_test, y_pred)
+        rmse = sqrt(mse)  # <- no `squared=False` now
+
+        metrics_raw = {
+            "mse": mse,
+            "rmse": rmse,
+            "mae": mean_absolute_error(y_test, y_pred),
+            "r2": r2_score(y_test, y_pred),
+        }
+        report = None
+
+    metrics = {k: float(v) for k, v in metrics_raw.items()}
     # Feature importances
-    importances = model.feature_importances_
-    feat_df = pd.DataFrame({
-        "feature": X.columns,
-        "importance": importances
-    }).sort_values(by="importance", ascending=False)
+    feat_df = (
+        pd.DataFrame(
+            {"feature": X.columns, "importance": model.feature_importances_}
+        )
+        .sort_values(by="importance", ascending=False)
+    )
 
-    # Plot feature importances
+    # Plot
     plt.figure(figsize=(10, 6))
     sns.barplot(x="importance", y="feature", data=feat_df)
-    plt.title("Feature Importance (Random Forest)")
+    plt.title(f"Feature Importance (Random Forest - {resolved_type})")
     plt.tight_layout()
     plt.savefig(save_path)
     plt.close()
 
+    feature_importances = [
+        {"feature": str(row["feature"]), "importance": float(row["importance"])}
+        for _, row in feat_df.iterrows()
+    ]
+
     return {
-        "accuracy": acc,
+        "problem_type": resolved_type,
+        "metrics": metrics,
         "report": report,
-        "feature_importances": feat_df,
-        "feature_importance_plot": save_path
+        "feature_importances": feature_importances,
+        "feature_importance_plot": save_path,
+        "dropped_rows_with_missing_target": dropped,
     }

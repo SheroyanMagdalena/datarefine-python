@@ -25,13 +25,21 @@ def train_xgboost(
     n_estimators: int = 300,
     learning_rate: float = 0.05,
     max_depth: int = 6,
-    save_path: str = "feature_importance_xgb.png"  # NEW: save feature importance plot
+    save_path: str = "feature_importance_xgb.png",
 ):
     """
     Trains an XGBoost model (classifier or regressor), computes metrics,
     and saves a feature importance plot for reporting.
 
-    Returns a dict compatible with your pipeline's artifact system.
+    Returns a dict that is JSON-serializable and compatible with the pipeline
+    artifact system:
+
+    {
+        "problem_type": str,
+        "metrics": dict[str, float],
+        "feature_importances": list[{"feature": str, "importance": float}],
+        "feature_importance_plot": str
+    }
     """
 
     if target not in df.columns:
@@ -101,40 +109,56 @@ def train_xgboost(
 
     # Compute metrics
     if resolved_type == "classification":
-        metrics = {
+        metrics_raw = {
             "accuracy": accuracy_score(y_test, y_pred),
-            "precision": precision_score(y_test, y_pred, average="weighted", zero_division=0),
-            "recall": recall_score(y_test, y_pred, average="weighted", zero_division=0),
+            "precision": precision_score(
+                y_test, y_pred, average="weighted", zero_division=0
+            ),
+            "recall": recall_score(
+                y_test, y_pred, average="weighted", zero_division=0
+            ),
             "f1": f1_score(y_test, y_pred, average="weighted", zero_division=0),
         }
     else:
         mse = mean_squared_error(y_test, y_pred)
-        metrics = {
+        metrics_raw = {
             "mse": mse,
             "rmse": mean_squared_error(y_test, y_pred, squared=False),
             "mae": mean_absolute_error(y_test, y_pred),
             "r2": r2_score(y_test, y_pred),
         }
 
-    # Feature importances
-    feature_names = list(X.columns)
-    importances = pd.Series(model.feature_importances_, index=feature_names).sort_values(ascending=False)
+    # Make metrics JSON-safe (pure Python floats)
+    metrics = {k: float(v) for k, v in metrics_raw.items()}
 
-    # ---------- NEW: Save feature importance plot ----------
+    # Feature importances (as Series)
+    feature_names = list(X.columns)
+    importances_series = pd.Series(
+        model.feature_importances_, index=feature_names
+    ).sort_values(ascending=False)
+
+    # Plot feature importances
     plt.figure(figsize=(10, 6))
-    sns.barplot(x=importances.values, y=importances.index)
+    sns.barplot(
+        x=importances_series.values,
+        y=importances_series.index,
+    )
     plt.title("Feature Importance (XGBoost)")
     plt.tight_layout()
     plt.savefig(save_path)
     plt.close()
 
+    # Convert importances to list[dict] for JSON
+    feat_df = importances_series.reset_index()
+    feat_df.columns = ["feature", "importance"]
+    feature_importances = [
+        {"feature": str(row["feature"]), "importance": float(row["importance"])}
+        for _, row in feat_df.iterrows()
+    ]
+
     return {
-        "model": model,
         "problem_type": resolved_type,
-        "feature_names": feature_names,
-        "feature_importances": importances,
-        "feature_importance_plot": save_path,  # NEW
         "metrics": metrics,
-        "y_test": y_test,
-        "y_pred": y_pred,
+        "feature_importances": feature_importances,
+        "feature_importance_plot": save_path,
     }

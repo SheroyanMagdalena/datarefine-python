@@ -1,17 +1,33 @@
-from fastapi import FastAPI, UploadFile, File, Form
-from fastapi.responses import FileResponse
-from typing import Optional
+import os
 import json
 import tempfile
-import os
+from typing import Optional
+import math
 
+import numpy as np
 import pandas as pd
+from fastapi import FastAPI, File, Form, UploadFile
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import JSONResponse, FileResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 from builder import build_pipeline
-from report import generate_pdf_report
+from report import generate_pdf_report  # adjust import if needed
 
 app = FastAPI()
 
+# Example CORS, adjust as you like
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/health")
+def health_check():
+    return {"status": "ok"}
 
 @app.post("/build-pipeline")
 async def build_pipeline_endpoint(
@@ -45,14 +61,26 @@ async def build_pipeline_endpoint(
         verbose=True,
     )
 
-    df_processed = result["df"]
+    df_processed: pd.DataFrame = result["df"]
     artifacts = result["artifacts"]
     preview = df_processed.head(50).to_dict(orient="records")
 
     # --- Locate any plots for PDF ---
-    correlation_img_path = artifacts.get("eda", {}).get("correlation", {}).get("heatmap_plot")
-    rf_img_path = artifacts.get("modeling", {}).get("random_forest", {}).get("feature_importance_plot")
-    xgb_img_path = artifacts.get("modeling", {}).get("xgboost", {}).get("feature_importance_plot")
+    correlation_img_path = (
+        artifacts.get("eda", {})
+        .get("correlation", {})
+        .get("heatmap_plot")
+    )
+    rf_img_path = (
+        artifacts.get("modeling", {})
+        .get("random_forest", {})
+        .get("feature_importance_plot")
+    )
+    xgb_img_path = (
+        artifacts.get("modeling", {})
+        .get("xgboost", {})
+        .get("feature_importance_plot")
+    )
 
     # --- Generate PDF report ---
     report_path = os.path.join(tempfile.gettempdir(), "report.pdf")
@@ -65,26 +93,61 @@ async def build_pipeline_endpoint(
         xgb_img_path=xgb_img_path,
     )
 
-    return {
+    raw_response = {
         "preview": preview,
         "columns": list(df_processed.columns),
         "artifacts": artifacts,
         "report_path": report_path,
     }
 
+    # --- Make everything JSON-safe ---
+    safe_response = jsonable_encoder(
+        raw_response,
+        custom_encoder={
+            # numpy scalars -> Python scalars
+            np.generic: lambda x: x.item(),
+            # numpy arrays -> lists
+            np.ndarray: lambda x: x.tolist(),
+        },
+    )
+    cleaned = replace_nans(safe_response)
+
+    return JSONResponse(content=cleaned)
+
+def replace_nans(obj):
+    """
+    Recursively walk a nested structure (dict/list/scalars)
+    and replace NaN / inf floats with None so JSON is happy.
+    """
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return None
+        return obj
+
+    if isinstance(obj, dict):
+        return {k: replace_nans(v) for k, v in obj.items()}
+
+    if isinstance(obj, list):
+        return [replace_nans(v) for v in obj]
+
+    # Leave everything else as-is (str, int, bool, None, etc.)
+    return obj
+
 @app.get("/download-report")
 def download_report():
     """
     Serve the latest generated PDF report.
-    (You may want to make this user/session-specific in production.)
     """
     report_path = os.path.join(tempfile.gettempdir(), "report.pdf")
 
     if not os.path.exists(report_path):
-        return {"error": "Report not found."}
+        return JSONResponse(
+            status_code=404,
+            content={"error": "Report not found."},
+        )
 
     return FileResponse(
         path=report_path,
         filename="datarefine_report.pdf",
-        media_type="application/pdf"
+        media_type="application/pdf",
     )

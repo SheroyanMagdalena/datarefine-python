@@ -1,5 +1,8 @@
 import pandas as pd
 import numpy as np
+import warnings
+
+
 
 def normalize_date_formats(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -39,7 +42,9 @@ def normalize_date_formats(df: pd.DataFrame) -> pd.DataFrame:
         # ---- CASE 2: Object/string columns ----
         if pd.api.types.is_object_dtype(series):
             # Try parsing, allowing errors, but inspect success rate
-            parsed = pd.to_datetime(series, errors="coerce", dayfirst=False)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                parsed = pd.to_datetime(series, errors="coerce", dayfirst=False)
 
             success_rate = parsed.notna().mean()
 
@@ -50,5 +55,7 @@ def normalize_date_formats(df: pd.DataFrame) -> pd.DataFrame:
         # ---- CASE 3: Already datetime ----
         if pd.api.types.is_datetime64_any_dtype(series):
             continue
+
+        
 
     return new_df
