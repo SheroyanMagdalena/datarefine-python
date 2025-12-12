@@ -110,6 +110,10 @@ def sanitize_for_json(obj):
 
 # ---------- main endpoint ----------
 
+@app.get("/build-pipeline")
+def health_check():
+    return {"status": "ok"}
+
 @app.post("/build-pipeline")
 async def build_pipeline_endpoint(
     file: UploadFile = File(...),
